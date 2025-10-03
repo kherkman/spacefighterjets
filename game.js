@@ -1847,70 +1847,77 @@ function updateJoystickHandlePosition(handleElement, playerTouchInput, currentTo
 
 // --- Plane Selection Touch Swiping ---
 let planeSelectionTouchStartX = 0;
+let planeSelectionTouchStartY = 0; // Added for vertical scroll tracking
 let planeSelectionTouchStartTime = 0;
 
 function handlePlaneSelectionTouchStart(e) {
     if (planeSelectionScreen.classList.contains('visible') && e.touches.length === 1) {
         planeSelectionTouchStartX = e.touches[0].clientX;
+        planeSelectionTouchStartY = e.touches[0].clientY; // Store initial Y position
         planeSelectionTouchStartTime = performance.now();
-        e.preventDefault(); // Prevent accidental scrolling
+        // Do NOT call e.preventDefault() here. This allows native vertical scrolling to start.
     }
 }
 
 function handlePlaneSelectionTouchEnd(e) {
-    if (planeSelectionScreen.classList.contains('visible') && e.changedTouches.length === 1) {
-        const touchEndX = e.changedTouches[0].clientX;
-        const touchEndTime = performance.now();
-        const deltaX = touchEndX - planeSelectionTouchStartX;
-        const deltaTime = touchEndTime - planeSelectionTouchStartTime;
-
-        // Only consider a swipe if it's horizontal enough and fast enough
-        if (Math.abs(deltaX) > SWIPE_THRESHOLD && deltaTime < 300) { // Swipe threshold and quick swipe
-            const now = performance.now();
-            if (now - lastGamepadNavigationTime > GAMEPAD_NAV_COOLDOWN) {
-                if (deltaX < 0) { // Swiped left
-                    navigateButtons(1); // Move right in options
-                } else { // Swiped right
-                    navigateButtons(-1); // Move left in options
-                }
-                lastGamepadNavigationTime = now;
-            }
-        } else if (Math.abs(deltaX) <= SWIPE_THRESHOLD && deltaTime < 300) {
-            // This is a tap, simulate click on the currently focused element
-            const now = performance.now();
-            if (now - lastGamepadNavigationTime > GAMEPAD_NAV_COOLDOWN) {
-                // Check if the tap happened on a focused element
-                const touchedElement = document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
-                if (touchedElement && touchedElement.classList.contains('plane-card') && touchedElement.classList.contains('focused')) {
-                     selectCurrentButton();
-                     lastGamepadNavigationTime = now;
-                } else {
-                    // If not on a focused element, maybe it's a direct tap on an unfocused card
-                    let targetCard = null;
-                    e.changedTouches.forEach(touch => {
-                        const card = document.elementFromPoint(touch.clientX, touch.clientY);
-                        if (card && card.classList.contains('plane-card')) {
-                            targetCard = card;
-                        }
-                    });
-                    if (targetCard) {
-                        // Find its index to set focus and then select it
-                        const index = Array.from(planeOptionsContainer.children).indexOf(targetCard);
-                        if (index !== -1) {
-                            if (focusedButtonIndex !== -1) {
-                                currentNavigableElements[focusedButtonIndex].classList.remove('focused');
-                            }
-                            focusedButtonIndex = index;
-                            currentNavigableElements[focusedButtonIndex].classList.add('focused');
-                            selectCurrentButton();
-                            lastGamepadNavigationTime = now;
-                        }
-                    }
-                }
-            }
-        }
-        e.preventDefault();
+    if (!planeSelectionScreen.classList.contains('visible') || e.changedTouches.length !== 1) {
+        return;
     }
+
+    const now = performance.now();
+    if (now - lastGamepadNavigationTime < GAMEPAD_NAV_COOLDOWN) {
+        // Prevent rapid actions, but don't prevent default if it was a scroll
+        // A simple cooldown is sufficient here to avoid triggering navigation twice.
+        // The preventDefault for selection/swipe will be handled below.
+        return;
+    }
+
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    const touchEndTime = performance.now();
+    const deltaX = touchEndX - planeSelectionTouchStartX;
+    const deltaY = touchEndY - planeSelectionTouchStartY; // Calculate vertical delta
+    const deltaTime = touchEndTime - planeSelectionTouchStartTime;
+
+    const isHorizontalSwipe = Math.abs(deltaX) > SWIPE_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY) && deltaTime < 300;
+    const isTap = Math.abs(deltaX) <= SWIPE_THRESHOLD && Math.abs(deltaY) <= SWIPE_THRESHOLD && deltaTime < 300;
+
+    if (isHorizontalSwipe) {
+        if (deltaX < 0) { // Swiped left
+            navigateButtons(1); // Move right in options
+        } else { // Swiped right
+            navigateButtons(-1); // Move left in options
+        }
+        lastGamepadNavigationTime = now;
+        e.preventDefault(); // Prevent page scrolling for horizontal swipe
+    } else if (isTap) {
+        const touchedElement = document.elementFromPoint(e.changedTouches[0].clientX, e.changedTouches[0].clientY);
+        let targetCard = null;
+
+        // Traverse up to find the .plane-card
+        let currentElement = touchedElement;
+        while (currentElement && currentElement !== planeOptionsContainer) {
+            if (currentElement.classList.contains('plane-card')) {
+                targetCard = currentElement;
+                break;
+            }
+            currentElement = currentElement.parentElement;
+        }
+
+        if (targetCard) {
+            const planeId = targetCard.dataset.planeId;
+            selectPlane(planeId); // Use the existing selectPlane logic
+            lastGamepadNavigationTime = now; // Update cooldown
+            e.preventDefault(); // Prevent any default tap behavior like link following
+        } else if (touchedElement === startGameButton && !startGameButton.disabled) {
+            // Check if the tap was directly on the start game button
+            startGameButton.click();
+            lastGamepadNavigationTime = now;
+            e.preventDefault();
+        }
+    }
+    // If it's neither a horizontal swipe nor a tap (e.g., a vertical scroll),
+    // we do NOT call e.preventDefault(), allowing native scrolling.
 }
 
 
