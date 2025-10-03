@@ -31,7 +31,7 @@ const touchControlsContainer = document.getElementById('touch-controls-container
 const touchJoystickLeftBase = document.getElementById('touch-joystick-left-base');
 const touchJoystickLeftHandle = document.getElementById('touch-joystick-left-handle');
 const touchFireLeft = document.getElementById('touch-fire-left');
-const touchJoystickRightBase = document.getElementById('touch-joystick-base right-side');
+const touchJoystickRightBase = document.getElementById('touch-joystick-right-base'); // Corrected ID selection
 const touchJoystickRightHandle = document.getElementById('touch-joystick-right-handle');
 const touchFireRight = document.getElementById('touch-fire-right');
 
@@ -349,6 +349,21 @@ class Player {
         }
     }
 }
+
+// --- Fullscreen Functionality ---
+function requestFullScreen() {
+    const element = document.documentElement; // Or gameContainer if you only want the game itself fullscreen
+    if (element.requestFullscreen) {
+        element.requestFullscreen();
+    } else if (element.mozRequestFullScreen) { // Firefox
+        element.mozRequestFullScreen();
+    } else if (element.webkitRequestFullscreen) { // Chrome, Safari and Opera
+        element.webkitRequestFullscreen();
+    } else if (element.msRequestFullscreen) { // IE/Edge
+        element.msRequestFullscreen();
+    }
+}
+
 
 // --- Game Initialization and Reset ---
 function resetGame() {
@@ -1521,11 +1536,13 @@ function showIntroScreen() {
 
 onePlayerButton.addEventListener('click', () => {
     numPlayers = 1;
+    requestFullScreen(); // Request fullscreen when 1 player is selected
     showPlaneSelection();
 });
 
 twoPlayersButton.addEventListener('click', () => {
     numPlayers = 2;
+    requestFullScreen(); // Request fullscreen when 2 players are selected
     showPlaneSelection();
 });
 
