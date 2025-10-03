@@ -461,7 +461,7 @@ function startLevel(levelNumber) {
             break;
         case 4:
             message = 'LEVEL 4: VOID HUNTERS';
-            scriptToLoad = 'enemies3.js';
+            scriptToLoad = 'enemies4.js';
             break;
         case 5:
             message = 'FINAL BOSS: OBLIVION MAW';
