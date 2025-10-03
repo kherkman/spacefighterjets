@@ -1235,7 +1235,7 @@ function levelComplete() {
 
     gameContainer.querySelectorAll('.enemy-projectile, .enemy-jet-wrapper').forEach(el => el.remove());
 
-    if (currentLevel < 4) {
+    if (currentLevel < 5) { // Assuming 5 levels total
         levelMessageText.textContent = `LEVEL ${currentLevel} COMPLETE!`;
         levelMessageOverlay.classList.add('visible');
         setTimeout(() => {
