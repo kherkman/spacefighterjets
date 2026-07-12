@@ -169,6 +169,14 @@ let hpfNode = null;
 let lpfNode = null;
 let limiterNode = null;
 
+// SFX Cache to completely prevent WebMediaPlayer leaks
+const sfxCache = {}; // filename -> AudioBuffer or "synth"
+const sfxFiles = [
+    'laser.mp3', 'explosion.mp3', 'pickup.mp3', 'damage.mp3',
+    'triple.mp3', 'laser_beam.mp3', 'fast.mp3', 'piercing.mp3',
+    'burst.mp3', 'scatter.mp3', 'heatseeker.mp3'
+];
+
 function initAudio() {
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -204,6 +212,50 @@ function initAudio() {
     if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume();
     }
+}
+
+// Preload SFX into AudioBuffers to avoid creating HTMLMediaElements on-the-fly
+async function loadSFX(filename) {
+    initAudio();
+    if (!audioCtx) return null;
+    if (sfxCache[filename]) return sfxCache[filename];
+    
+    try {
+        const response = await fetch(filename);
+        if (!response.ok) throw new Error("404");
+        const arrayBuffer = await response.arrayBuffer();
+        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        sfxCache[filename] = audioBuffer;
+        return audioBuffer;
+    } catch (e) {
+        // Fallback to "synth" so we don't attempt to load it again
+        sfxCache[filename] = "synth";
+        return null;
+    }
+}
+
+function preloadAllSFX() {
+    initAudio();
+    sfxFiles.forEach(file => {
+        loadSFX(file);
+    });
+}
+
+// Play decoded AudioBuffer directly through Web Audio nodes without creating WebMediaPlayer
+function playAudioBuffer(audioBuffer) {
+    if (!audioCtx || !audioBuffer || audioBuffer === "synth") return false;
+    
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    
+    source.connect(gainNode);
+    gainNode.connect(hpfNode); // Routes into DSP chain (HPF -> LPF -> Limiter -> Master)
+    
+    source.start(0);
+    return true;
 }
 
 // Procedural sound synth fallback generators routing through the filters and limiter
@@ -386,7 +438,7 @@ function playDamageSoundSynth() {
     osc.stop(audioCtx.currentTime + 0.2);
 }
 
-// Standard fallback sound wrapper
+// Standard fallback sound wrapper using preloaded AudioBuffers
 function playLaserSound() {
     playSoundWithFallback('laser.mp3', playLaserSoundSynth);
 }
@@ -406,6 +458,7 @@ function playDamageSound() {
 // Integrated primary weapon audio player attempting to load specific physical MP3s with fallback to Web Audio
 function playWeaponSound(weaponType) {
     if (!sfxEnabled) return;
+    initAudio();
     
     let mp3Name = 'laser.mp3'; // Standard
     if (weaponType === 'triple') mp3Name = 'triple.mp3';
@@ -416,31 +469,31 @@ function playWeaponSound(weaponType) {
     else if (weaponType === 'scatter') mp3Name = 'scatter.mp3';
     else if (weaponType === 'heatseeker') mp3Name = 'heatseeker.mp3';
 
-    const audio = new Audio(mp3Name);
-    audio.volume = 0.4;
-    
-    audio.play()
-        .then(() => {
-            // Success
-        })
-        .catch(() => {
-            // Load synthesizer fallback
-            playWeaponSoundSynth(weaponType);
-        });
+    const cachedBuffer = sfxCache[mp3Name];
+    if (cachedBuffer && cachedBuffer !== "synth") {
+        playAudioBuffer(cachedBuffer);
+    } else if (cachedBuffer === "synth") {
+        playWeaponSoundSynth(weaponType);
+    } else {
+        // Try on-demand loading, but trigger synth instantly to avoid stuttering/delays
+        loadSFX(mp3Name);
+        playWeaponSoundSynth(weaponType);
+    }
 }
 
 function playSoundWithFallback(mp3Path, synthCallback) {
     if (!sfxEnabled) return;
-    const audio = new Audio(mp3Path);
-    audio.volume = 0.4;
+    initAudio();
     
-    audio.play()
-        .then(() => {
-            // Success
-        })
-        .catch(() => {
-            synthCallback();
-        });
+    const cachedBuffer = sfxCache[mp3Path];
+    if (cachedBuffer && cachedBuffer !== "synth") {
+        playAudioBuffer(cachedBuffer);
+    } else if (cachedBuffer === "synth") {
+        synthCallback();
+    } else {
+        loadSFX(mp3Path);
+        synthCallback();
+    }
 }
 
 function stopMusic() {
@@ -2037,19 +2090,21 @@ function showIntroScreen() {
 
 onePlayerButton.addEventListener('click', () => {
     initAudio();
+    preloadAllSFX(); // Decodes & loads all MP3s into memory at first interaction
     numPlayers = 1;
     requestFullScreen();
     showPlaneSelection();
 });
 
-// Sound toggles
 twoPlayersButton.addEventListener('click', () => {
     initAudio();
+    preloadAllSFX(); // Decodes & loads all MP3s into memory at first interaction
     numPlayers = 2;
     requestFullScreen();
     showPlaneSelection();
 });
 
+// Sound toggles
 fxToggleButton.addEventListener('click', () => {
     initAudio();
     sfxEnabled = !sfxEnabled;
