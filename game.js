@@ -1,3 +1,4 @@
+
 // game.js
 
 // Make sure playerPlanes.js is loaded BEFORE this script in index.html
@@ -117,6 +118,9 @@ let introCtx = null;
 let introWarpStars = [];
 const NUM_INTRO_WARP_STARS = 100;
 let introWarpAnimationId = null;
+
+// Menu and Opacity Slider lock states
+let sliderLocked = false;
 
 // Global object to interact with the currently loaded enemy module
 window.currentLevelModule = null;
@@ -968,6 +972,28 @@ window.addEventListener('resize', () => {
 });
 
 
+// Dynamic slider values adjustment
+function adjustSlider(amount) {
+    let val = parseFloat(touchOpacitySlider.value);
+    val = Math.max(0, Math.min(1, val + amount));
+    touchOpacitySlider.value = val.toFixed(1);
+    
+    // Manually trigger opacity update
+    touchControlsContainer.style.opacity = touchOpacitySlider.value;
+    playPickupSound(); // Sound feedback
+}
+
+function toggleSliderLock() {
+    sliderLocked = !sliderLocked;
+    if (sliderLocked) {
+        touchOpacitySlider.classList.add('slider-locked');
+    } else {
+        touchOpacitySlider.classList.remove('slider-locked');
+    }
+    playPickupSound(); // Feedback sound
+}
+
+
 // --- Player Movement (Keyboard, Gamepad, Touch) ---
 document.addEventListener('keydown', (e) => {
     keysPressed[e.code] = true;
@@ -978,16 +1004,38 @@ document.addEventListener('keydown', (e) => {
         let handledNav = false;
         // Intro Screen Navigation
         if (introScreen.style.display === 'flex') {
-            if (['KeyA', 'ArrowLeft'].includes(e.code)) {
-                navigateButtons(-1);
-                handledNav = true;
-            } else if (['KeyD', 'ArrowRight'].includes(e.code)) {
-                navigateButtons(1);
-                handledNav = true;
-            }
-            if (['Space', 'ShiftRight', 'Enter'].includes(e.code)) {
-                selectCurrentButton();
-                handledNav = true;
+            const focusedElement = currentNavigableElements[focusedButtonIndex];
+            
+            if (focusedElement === touchOpacitySlider && sliderLocked) {
+                // When locked, WASD or Arrows adjust slider values
+                if (['KeyA', 'ArrowLeft', 'KeyW', 'ArrowUp'].includes(e.code)) {
+                    adjustSlider(-0.1);
+                    handledNav = true;
+                } else if (['KeyD', 'ArrowRight', 'KeyS', 'ArrowDown'].includes(e.code)) {
+                    adjustSlider(0.1);
+                    handledNav = true;
+                }
+                if (['Space', 'ShiftRight', 'Enter'].includes(e.code)) {
+                    toggleSliderLock();
+                    handledNav = true;
+                }
+            } else {
+                // Normal menu navigation
+                if (['KeyA', 'ArrowLeft', 'KeyW', 'ArrowUp'].includes(e.code)) {
+                    navigateButtons(-1);
+                    handledNav = true;
+                } else if (['KeyD', 'ArrowRight', 'KeyS', 'ArrowDown'].includes(e.code)) {
+                    navigateButtons(1);
+                    handledNav = true;
+                }
+                if (['Space', 'ShiftRight', 'Enter'].includes(e.code)) {
+                    if (focusedElement === touchOpacitySlider) {
+                        toggleSliderLock();
+                    } else {
+                        selectCurrentButton();
+                    }
+                    handledNav = true;
+                }
             }
         }
         // Plane Selection Screen Navigation
@@ -2011,7 +2059,6 @@ function updatePlaneSelectionState() {
         if (selectedPlane1) {
             allPlayersSelected = true;
             playerTurnMessage.textContent = `Player 1 selected: ${selectedPlane1.name}.`;
-            setupGamepadNavigation([startGameButton], 0);
         } else {
             playerTurnMessage.textContent = `Player 1: Select your fighter.`;
             setupGamepadNavigation(Array.from(planeOptionsContainer.children), 0);
@@ -2020,7 +2067,6 @@ function updatePlaneSelectionState() {
         if (selectedPlane1 && selectedPlane2) {
             allPlayersSelected = true;
             playerTurnMessage.textContent = `Player 1: ${selectedPlane1.name}, Player 2: ${selectedPlane2.name}. Both players ready!`;
-            setupGamepadNavigation([startGameButton], 0);
         } else if (selectedPlane1 && !selectedPlane2) {
             playerTurnMessage.textContent = `Player 1 selected: ${selectedPlane1.name}. Player 2: Select your fighter.`;
             currentPlayerSelecting = 'P2';
@@ -2037,9 +2083,12 @@ function updatePlaneSelectionState() {
     }
 
     startGameButton.disabled = !allPlayersSelected;
+    // Set button visibility strictly based on whether all required players have selected their planes
+    startGameButton.style.display = allPlayersSelected ? 'inline-block' : 'none';
+
     if (allPlayersSelected) {
         setupGamepadNavigation([startGameButton], 0);
-    } else if (currentNavigableElements[focusedButtonIndex] === startGameButton && startGameButton.disabled) {
+    } else if (currentNavigableElements[focusedButtonIndex] === startGameButton && !allPlayersSelected) {
         setupGamepadNavigation(Array.from(planeOptionsContainer.children), 0);
     }
 }
@@ -2084,7 +2133,13 @@ function showIntroScreen() {
     gameOverScreen.classList.remove('visible');
     gameFinishedScreen.classList.remove('visible');
     playBackgroundMusic('intro.mp3', true);
-    setupGamepadNavigation([onePlayerButton, twoPlayersButton], 0);
+    
+    // Reset opacity slider states on show
+    sliderLocked = false;
+    touchOpacitySlider.classList.remove('slider-locked');
+
+    // Make slider and sound toggles navigable in sequence
+    setupGamepadNavigation([onePlayerButton, twoPlayersButton, fxToggleButton, musicToggleButton, touchOpacitySlider], 0);
     initIntroWarpSpeed(); // Initialize space warp stars
 }
 
@@ -2228,19 +2283,27 @@ function pollGamepads() {
                 const dpadRight = gp.buttons[15];
                 const selectButton = gp.buttons[0];
 
+                const focusedElement = currentNavigableElements[focusedButtonIndex];
+
                 if (now - lastGamepadNavigationTime > GAMEPAD_NAV_COOLDOWN) {
-                    if (dpadUp && dpadUp.pressed || yAxis < -GAMEPAD_AXIS_THRESHOLD) {
-                        navigateButtons(-1);
-                        navigated = true;
-                    } else if (dpadDown && dpadDown.pressed || yAxis > GAMEPAD_AXIS_THRESHOLD) {
-                        navigateButtons(1);
-                        navigated = true;
-                    } else if (dpadLeft && dpadLeft.pressed || xAxis < -GAMEPAD_AXIS_THRESHOLD) {
-                        navigateButtons(-1);
-                        navigated = true;
-                    } else if (dpadRight && dpadRight.pressed || xAxis > GAMEPAD_AXIS_THRESHOLD) {
-                        navigateButtons(1);
-                        navigated = true;
+                    if (focusedElement === touchOpacitySlider && sliderLocked) {
+                        // Slider is locked: adjust values directly with Left/Right
+                        if (dpadLeft && dpadLeft.pressed || xAxis < -GAMEPAD_AXIS_THRESHOLD) {
+                            adjustSlider(-0.1);
+                            navigated = true;
+                        } else if (dpadRight && dpadRight.pressed || xAxis > GAMEPAD_AXIS_THRESHOLD) {
+                            adjustSlider(0.1);
+                            navigated = true;
+                        }
+                    } else {
+                        // Normal menu navigation: standard d-pad/sticks movements
+                        if (dpadUp && dpadUp.pressed || yAxis < -GAMEPAD_AXIS_THRESHOLD || dpadLeft && dpadLeft.pressed || xAxis < -GAMEPAD_AXIS_THRESHOLD) {
+                            navigateButtons(-1);
+                            navigated = true;
+                        } else if (dpadDown && dpadDown.pressed || yAxis > GAMEPAD_AXIS_THRESHOLD || dpadRight && dpadRight.pressed || xAxis > GAMEPAD_AXIS_THRESHOLD) {
+                            navigateButtons(1);
+                            navigated = true;
+                        }
                     }
 
                     if (navigated) {
@@ -2248,7 +2311,11 @@ function pollGamepads() {
                     }
                 }
                 if (selectButton && selectButton.pressed && (now - lastGamepadNavigationTime > GAMEPAD_NAV_COOLDOWN)) {
-                    selectCurrentButton();
+                    if (focusedElement === touchOpacitySlider) {
+                        toggleSliderLock();
+                    } else {
+                        selectCurrentButton();
+                    }
                     lastGamepadNavigationTime = now;
                 }
             }
@@ -2698,6 +2765,15 @@ function injectVisualUpgradeStyles() {
         }
         .game-overlay, #intro-screen, #plane-selection-screen {
             background: radial-gradient(circle at center, #150030 0%, #000010 100%) !important;
+        }
+        #intro-screen input[type="range"].focused {
+            outline: 3px solid #00ff00 !important;
+            transform: scale(1.05) !important;
+            transition: transform 0.2s ease !important;
+        }
+        #intro-screen input[type="range"].slider-locked {
+            outline: 3px solid #ff00cc !important;
+            box-shadow: 0 0 15px #ff00cc, 0 0 25px rgba(255, 0, 204, 0.7) !important;
         }
     `;
     document.head.appendChild(style);
