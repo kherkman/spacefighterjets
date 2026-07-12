@@ -206,7 +206,7 @@ function initAudio() {
     }
 }
 
-// Procedural sound synth helpers routing through the filters and limiter
+// Procedural sound synth fallback generators routing through the filters and limiter
 function playLaserSoundSynth() {
     initAudio();
     if (!audioCtx || !hpfNode) return;
@@ -228,9 +228,8 @@ function playLaserSoundSynth() {
     osc.stop(audioCtx.currentTime + 0.15);
 }
 
-// Custom weapon sound synthesizer based on weapon types
-function playWeaponSound(weaponType) {
-    if (!sfxEnabled) return;
+// Custom weapon synth sound generator if corresponding MP3 is missing
+function playWeaponSoundSynth(weaponType) {
     initAudio();
     if (!audioCtx || !hpfNode) return;
 
@@ -387,7 +386,7 @@ function playDamageSoundSynth() {
     osc.stop(audioCtx.currentTime + 0.2);
 }
 
-// Main wrappers checking for local MP3 and falling back to Web Audio synthesis if not found
+// Standard fallback sound wrapper
 function playLaserSound() {
     playSoundWithFallback('laser.mp3', playLaserSoundSynth);
 }
@@ -402,6 +401,32 @@ function playPickupSound() {
 
 function playDamageSound() {
     playSoundWithFallback('damage.mp3', playDamageSoundSynth);
+}
+
+// Integrated primary weapon audio player attempting to load specific physical MP3s with fallback to Web Audio
+function playWeaponSound(weaponType) {
+    if (!sfxEnabled) return;
+    
+    let mp3Name = 'laser.mp3'; // Standard
+    if (weaponType === 'triple') mp3Name = 'triple.mp3';
+    else if (weaponType === 'laser') mp3Name = 'laser_beam.mp3';
+    else if (weaponType === 'fast') mp3Name = 'fast.mp3';
+    else if (weaponType === 'piercing') mp3Name = 'piercing.mp3';
+    else if (weaponType === 'burst') mp3Name = 'burst.mp3';
+    else if (weaponType === 'scatter') mp3Name = 'scatter.mp3';
+    else if (weaponType === 'heatseeker') mp3Name = 'heatseeker.mp3';
+
+    const audio = new Audio(mp3Name);
+    audio.volume = 0.4;
+    
+    audio.play()
+        .then(() => {
+            // Success
+        })
+        .catch(() => {
+            // Load synthesizer fallback
+            playWeaponSoundSynth(weaponType);
+        });
 }
 
 function playSoundWithFallback(mp3Path, synthCallback) {
@@ -851,7 +876,7 @@ function gameOver() {
 function gameFinished() {
     gameRunning = false;
     cancelAnimationFrame(animationFrameId);
-    playBackgroundMusic('finish.mp3', false); // Play only once (false loop parameter)
+    playBackgroundMusic('finish.mp3', false); // Play once (false loop parameter)
     let totalScore = 0;
     players.forEach(p => totalScore += p.score);
     finalScoreFinishedDisplay.textContent = `Final Score: ${totalScore}`;
@@ -1089,7 +1114,7 @@ function updatePlayerPosition(player, frameRateFactor) {
 function shootProjectile(player) {
     if (!gameRunning || levelTransitioning || player.lives <= 0) return;
 
-    playWeaponSound(player.weaponType); // Play weapon-specific custom sound
+    playWeaponSound(player.weaponType); // Play weapon-specific custom sound with fallback
 
     let projectileConfigs = [];
     const baseProjectileStartX = player.x;
@@ -2017,6 +2042,7 @@ onePlayerButton.addEventListener('click', () => {
     showPlaneSelection();
 });
 
+// Sound toggles
 twoPlayersButton.addEventListener('click', () => {
     initAudio();
     numPlayers = 2;
@@ -2024,7 +2050,6 @@ twoPlayersButton.addEventListener('click', () => {
     showPlaneSelection();
 });
 
-// Sound toggles
 fxToggleButton.addEventListener('click', () => {
     initAudio();
     sfxEnabled = !sfxEnabled;
