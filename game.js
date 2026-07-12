@@ -1,3 +1,4 @@
+
 // game.js
 
 // Make sure playerPlanes.js is loaded BEFORE this script in index.html
@@ -195,9 +196,8 @@ function initAudio() {
     }
 }
 
-// Procedural sound synth helpers routing through the filters and limiter
-function playLaserSound() {
-    if (!sfxEnabled) return;
+// Procedural sound synth helpers routing through the filters and limiter (Web Audio Fallbacks)
+function playLaserSoundSynth() {
     initAudio();
     if (!audioCtx || !hpfNode) return;
 
@@ -218,8 +218,7 @@ function playLaserSound() {
     osc.stop(audioCtx.currentTime + 0.15);
 }
 
-function playExplosionSound() {
-    if (!sfxEnabled) return;
+function playExplosionSoundSynth() {
     initAudio();
     if (!audioCtx || !hpfNode) return;
 
@@ -251,8 +250,7 @@ function playExplosionSound() {
     noise.stop(audioCtx.currentTime + 0.35);
 }
 
-function playPickupSound() {
-    if (!sfxEnabled) return;
+function playPickupSoundSynth() {
     initAudio();
     if (!audioCtx || !hpfNode) return;
 
@@ -274,8 +272,7 @@ function playPickupSound() {
     osc.stop(audioCtx.currentTime + 0.25);
 }
 
-function playDamageSound() {
-    if (!sfxEnabled) return;
+function playDamageSoundSynth() {
     initAudio();
     if (!audioCtx || !hpfNode) return;
 
@@ -294,6 +291,38 @@ function playDamageSound() {
 
     osc.start();
     osc.stop(audioCtx.currentTime + 0.2);
+}
+
+// Main wrappers checking for local MP3 and falling back to Web Audio synthesis if not found
+function playLaserSound() {
+    playSoundWithFallback('laser.mp3', playLaserSoundSynth);
+}
+
+function playExplosionSound() {
+    playSoundWithFallback('explosion.mp3', playExplosionSoundSynth);
+}
+
+function playPickupSound() {
+    playSoundWithFallback('pickup.mp3', playPickupSoundSynth);
+}
+
+function playDamageSound() {
+    playSoundWithFallback('damage.mp3', playDamageSoundSynth);
+}
+
+function playSoundWithFallback(mp3Path, synthCallback) {
+    if (!sfxEnabled) return;
+    const audio = new Audio(mp3Path);
+    audio.volume = 0.4;
+    
+    audio.play()
+        .then(() => {
+            // Success! Played MP3.
+        })
+        .catch(() => {
+            // Error (e.g. file 404, autoplay limit) -> fall back to Web Audio Synth
+            synthCallback();
+        });
 }
 
 function stopMusic() {
@@ -340,8 +369,12 @@ class Player {
         this.lives = planeData.initialHealth; // Use plane-specific initial health
         this.maxLives = planeData.initialHealth; // Store max health for bar calculations
         this.score = 0;
-        this.isShooting = false;
-        this.lastShotTime = 0;
+        
+        // Shooting state properties (Toggle / Hold method)
+        this.fireState = true; // Auto-firing default to On
+        this.isHoldingFire = false; // Is player actively pressing firing input
+        this.firePressTime = 0; // When firing input was pressed (for tap detection)
+        this.lastShotTime = 0; // Must be initialized to avoid NaN errors
 
         this.currentSpeedX = 0;
         this.currentSpeedY = 0;
@@ -445,6 +478,28 @@ class Player {
             this.playerJetElement.classList.remove('damaged-flash');
         }, 500);
 
+        if (this.lives <= 0) {
+            // Trigger player destroyed animation with parts flying apart
+            createPlayerDestroyedAnimation(this.x, this.y, this.playerJetSVGContainer);
+
+            this.playerJetElement.style.display = 'none'; // Hide defeated player
+            this.scoreDisplayElement.style.display = 'none'; // Hide score
+            this.healthBarContainerElement.style.display = 'none'; // Hide health bar
+            
+            // Turn off shooting
+            this.fireState = false;
+            this.isHoldingFire = false;
+            
+            // Reset joystick/fire states if this player was using touch
+            if (this.id === 'player1') {
+                touchInput.player1.joystickActive = false;
+                touchInput.player1.fireActive = false;
+            } else if (this.id === 'player2') {
+                touchInput.player2.joystickActive = false;
+                touchInput.player2.fireActive = false;
+            }
+        }
+
         // Check overall game over conditions
         let allPlayersDefeated = true;
         for (const p of players) {
@@ -454,24 +509,11 @@ class Player {
             }
         }
         if (allPlayersDefeated) {
-            gameOver();
-        } else if (this.lives <= 0) {
-            // Trigger player destroyed animation
-            createPlayerDestroyedAnimation(this.x, this.y);
-
-            this.playerJetElement.style.display = 'none'; // Hide defeated player
-            this.scoreDisplayElement.style.display = 'none'; // Hide score
-            this.healthBarContainerElement.style.display = 'none'; // Hide health bar
-            // Prevent shooting for defeated player
-            this.isShooting = false;
-            // Reset joystick/fire states if this player was using touch
-            if (this.id === 'player1') {
-                touchInput.player1.joystickActive = false;
-                touchInput.player1.fireActive = false;
-            } else if (this.id === 'player2') {
-                touchInput.player2.joystickActive = false;
-                touchInput.player2.fireActive = false;
-            }
+            // Freeze gameplay updates but delay Game Over screen to let the destruction play out!
+            gameRunning = false;
+            setTimeout(() => {
+                gameOver();
+            }, 1500); // 1.5 seconds delay of epic destruction
         }
     }
 
@@ -739,7 +781,7 @@ function gameOver() {
 function gameFinished() {
     gameRunning = false;
     cancelAnimationFrame(animationFrameId);
-    stopMusic();
+    playBackgroundMusic('finish.mp3', true);
     //clearInterval(gamepadPollInterval); // Stop gamepad polling for in-game
     // Sum up scores for all players
     let totalScore = 0;
@@ -837,28 +879,57 @@ document.addEventListener('keydown', (e) => {
     if (players[0] && players[0].lives > 0) {
         if (['Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
             e.preventDefault(); // Prevent scrolling if spacebar is pressed
-            if (e.code === 'Space') players[0].isShooting = true;
+            if (e.code === 'Space') {
+                if (!players[0].isHoldingFire) {
+                    players[0].isHoldingFire = true;
+                    players[0].firePressTime = now;
+                }
+            }
         }
     }
     // Player 2 controls (Arrows or Gamepad 1 or Touch Right)
     if (players[1] && players[1].lives > 0) {
         if (['ShiftRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight'].includes(e.code)) {
             e.preventDefault();
-            if (e.code === 'ShiftRight') players[1].isShooting = true;
+            if (e.code === 'ShiftRight') {
+                if (!players[1].isHoldingFire) {
+                    players[1].isHoldingFire = true;
+                    players[1].firePressTime = now;
+                }
+            }
         }
     }
 });
 
 document.addEventListener('keyup', (e) => {
     keysPressed[e.code] = false;
+    const now = performance.now();
 
     if (!gameRunning || levelTransitioning) return;
 
     if (players[0] && players[0].lives > 0) {
-        if (e.code === 'Space') players[0].isShooting = false;
+        if (e.code === 'Space') {
+            if (players[0].isHoldingFire) {
+                players[0].isHoldingFire = false;
+                const duration = now - players[0].firePressTime;
+                // If it was a quick tap, toggle the automatic shooting state
+                if (duration < 250) {
+                    players[0].fireState = !players[0].fireState;
+                }
+            }
+        }
     }
     if (players[1] && players[1].lives > 0) {
-        if (e.code === 'ShiftRight') players[1].isShooting = false;
+        if (e.code === 'ShiftRight') {
+            if (players[1].isHoldingFire) {
+                players[1].isHoldingFire = false;
+                const duration = now - players[1].firePressTime;
+                // If it was a quick tap, toggle the automatic shooting state
+                if (duration < 250) {
+                    players[1].fireState = !players[1].fireState;
+                }
+            }
+        }
     }
 });
 
@@ -1258,35 +1329,89 @@ function createOrbCollectedAnimation(x, y, type) {
     }, 300);
 }
 
-function createPlayerDestroyedAnimation(centerX, centerY) {
-    const numParticles = 15; // More particles for player
-    const colors = ['#FF00CC', '#00FFFF', '#8e2de2', '#4a00e0', '#3333FF']; // Player-themed colors
+function createPlayerDestroyedAnimation(centerX, centerY, svgContainer) {
+    playExplosionSound(); // Play epic explosion sound
+
+    // 1. Massive glowing particle scatter (30 particles)
+    const numParticles = 30;
+    const colors = ['#FF00CC', '#00FFFF', '#8e2de2', '#FF4500', '#FFCC00'];
 
     for (let i = 0; i < numParticles; i++) {
         const particle = document.createElement('div');
         particle.classList.add('player-destroyed-particle');
-
-        // Assign a random player-themed color
         particle.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+        particle.style.width = `${Math.random() * 8 + 4}px`; // Larger random sizes
+        particle.style.height = particle.style.width;
+        particle.style.boxShadow = `0 0 10px ${particle.style.backgroundColor}, 0 0 20px ${particle.style.backgroundColor}`;
 
         gameContainer.appendChild(particle);
 
-        particle.style.left = `${centerX - 3}px`; // Half of particle width/height
-        particle.style.top = `${centerY - 3}px`;
+        particle.style.left = `${centerX}px`;
+        particle.style.top = `${centerY}px`;
 
         const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * 50 + 30; // Further scatter
+        const distance = Math.random() * 120 + 50; // Much larger scatter distance
         const targetX = centerX + Math.cos(angle) * distance;
         const targetY = centerY + Math.sin(angle) * distance;
 
+        // Transition setup
+        particle.style.transition = 'transform 1.2s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 1.2s ease-out';
+
         requestAnimationFrame(() => {
-            particle.style.transform = `translate(${targetX - centerX}px, ${targetY - centerY}px)`;
+            particle.style.transform = `translate(${targetX - centerX}px, ${targetY - centerY}px) scale(0.2)`;
             particle.style.opacity = '0';
         });
 
         setTimeout(() => {
             particle.remove();
-        }, 800); // Longer animation duration
+        }, 1200);
+    }
+
+    // 2. Flying ship parts / debris chunks (Koneen osat lentävät erilleen)
+    const numDebris = 6;
+    const debrisPolygons = [
+        'polygon(0% 0%, 100% 0%, 50% 100%)', // Triangle wing chunk
+        'polygon(20% 0%, 80% 0%, 100% 100%, 0% 100%)', // Trapezoid fuselage chunk
+        'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)', // Diamond cockpit chunk
+        'polygon(0% 20%, 100% 0%, 80% 100%, 20% 80%)', // Jagged wingtip
+        'polygon(10% 10%, 90% 0%, 100% 90%, 0% 100%)', // Engine cover
+        'polygon(50% 0%, 100% 100%, 0% 100%)' // Tail fin
+    ];
+
+    for (let i = 0; i < numDebris; i++) {
+        const chunk = document.createElement('div');
+        chunk.style.position = 'absolute';
+        chunk.style.width = `${Math.random() * 20 + 20}px`; // Massive chunks
+        chunk.style.height = chunk.style.width;
+        chunk.style.clipPath = debrisPolygons[i % debrisPolygons.length];
+        
+        // Style with cyber gradients matching the aesthetic
+        chunk.style.background = 'linear-gradient(135deg, #8e2de2, #ff00cc)';
+        chunk.style.border = '1px solid #00ffff';
+        chunk.style.boxShadow = '0 0 15px rgba(0, 255, 255, 0.8)';
+        chunk.style.zIndex = '60';
+
+        gameContainer.appendChild(chunk);
+
+        chunk.style.left = `${centerX - parseFloat(chunk.style.width)/2}px`;
+        chunk.style.top = `${centerY - parseFloat(chunk.style.height)/2}px`;
+
+        const angle = (i / numDebris) * Math.PI * 2 + (Math.random() * 0.5 - 0.25);
+        const distance = Math.random() * 150 + 100; // Far fly distance
+        const targetX = centerX + Math.cos(angle) * distance;
+        const targetY = centerY + Math.sin(angle) * distance;
+        const rotation = Math.random() * 720 - 360; // Dynamic spin
+
+        chunk.style.transition = 'transform 1.5s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 1.5s ease-out';
+
+        requestAnimationFrame(() => {
+            chunk.style.transform = `translate(${targetX - centerX}px, ${targetY - centerY}px) rotate(${rotation}deg) scale(0.5)`;
+            chunk.style.opacity = '0';
+        });
+
+        setTimeout(() => {
+            chunk.remove();
+        }, 1500);
     }
 }
 
@@ -1494,7 +1619,10 @@ function gameLoop(currentTime) {
                 actualShotCooldown = 350; // Slower fire rate for heatseeker
             }
 
-            if (player.isShooting && currentTime - player.lastShotTime > actualShotCooldown) {
+            // Fire input logic (checks if auto-fire state is active OR player is holding fire button down)
+            const shouldShoot = player.fireState || player.isHoldingFire;
+
+            if (shouldShoot && currentTime - player.lastShotTime > actualShotCooldown) {
                 shootProjectile(player);
                 player.lastShotTime = currentTime;
             }
@@ -1740,6 +1868,13 @@ onePlayerButton.addEventListener('click', () => {
     showPlaneSelection();
 });
 
+twoPlayersButton.addEventListener('click', () => {
+    initAudio();
+    numPlayers = 2;
+    requestFullScreen(); // Request fullscreen when 2 players are selected
+    showPlaneSelection();
+});
+
 // Sound toggles
 fxToggleButton.addEventListener('click', () => {
     initAudio();
@@ -1844,9 +1979,18 @@ function pollGamepads() {
                     // Buttons (e.g., A button for shooting)
                     const fireButton = gp.buttons[0]; // Standard A button
                     if (fireButton && fireButton.pressed) {
-                        player.isShooting = true;
+                        if (!player.isHoldingFire) {
+                            player.isHoldingFire = true;
+                            player.firePressTime = now;
+                        }
                     } else {
-                        player.isShooting = false;
+                        if (player.isHoldingFire) {
+                            player.isHoldingFire = false;
+                            const duration = now - player.firePressTime;
+                            if (duration < 250) {
+                                player.fireState = !player.fireState;
+                            }
+                        }
                     }
                 }
             } else { // Menu navigation (only P1's gamepad controls menus)
@@ -1900,12 +2044,22 @@ function showTouchControls(visible) {
             touchJoystickRightBase.classList.add('visible');
             touchFireLeft.classList.add('visible');
             touchFireRight.classList.remove('visible');
+
+            // Force outer screen boundaries for 1 Player layouts (Joystick Right, Fire Left)
+            touchFireLeft.style.left = '40px';
+            touchJoystickRightBase.style.right = '40px';
         } else {
             // 2 Players: P1 uses Left controls, P2 uses Right controls
             touchJoystickLeftBase.classList.add('visible');
             touchJoystickRightBase.classList.add('visible');
             touchFireLeft.classList.add('visible');
             touchFireRight.classList.add('visible');
+
+            // Set positions for 2 Players layouts to avoid overlaps in split screens
+            touchJoystickLeftBase.style.left = '30px';
+            touchFireLeft.style.left = '170px';
+            touchJoystickRightBase.style.right = '30px';
+            touchFireRight.style.right = '170px';
         }
     } else {
         touchControlsContainer.classList.remove('visible');
@@ -1962,7 +2116,10 @@ function handleTouchStart(e) {
             } else if (touchPos.x < GAME_WIDTH / 2 && players[0] && players[0].lives > 0) {
                 // Check left side fire button
                 if (checkCollision({left: touchPos.x, right: touchPos.x + 1, top: touchPos.y, bottom: touchPos.y + 1}, fireLeftRect)) {
-                    players[0].isShooting = true;
+                    if (!players[0].isHoldingFire) {
+                        players[0].isHoldingFire = true;
+                        players[0].firePressTime = performance.now();
+                    }
                     touchFireLeft.classList.add('active');
                     touchInput.player1.fireActive = true;
                     touchInput.player1.touchId = touch.identifier;
@@ -1985,7 +2142,10 @@ function handleTouchStart(e) {
                 }
                 // Check if touch is within fire button
                 else if (checkCollision({left: touchPos.x, right: touchPos.x + 1, top: touchPos.y, bottom: touchPos.y + 1}, fireLeftRect)) {
-                    players[0].isShooting = true;
+                    if (!players[0].isHoldingFire) {
+                        players[0].isHoldingFire = true;
+                        players[0].firePressTime = performance.now();
+                    }
                     touchFireLeft.classList.add('active');
                     touchInput.player1.fireActive = true;
                     touchInput.player1.touchId = touch.identifier;
@@ -2007,7 +2167,10 @@ function handleTouchStart(e) {
                 }
                 // Check if touch is within fire button
                 else if (checkCollision({left: touchPos.x, right: touchPos.x + 1, top: touchPos.y, bottom: touchPos.y + 1}, fireRightRect)) {
-                    players[1].isShooting = true;
+                    if (!players[1].isHoldingFire) {
+                        players[1].isHoldingFire = true;
+                        players[1].firePressTime = performance.now();
+                    }
                     touchFireRight.classList.add('active');
                     touchInput.player2.fireActive = true;
                     touchInput.player2.touchId = touch.identifier;
@@ -2043,6 +2206,7 @@ function handleTouchMove(e) {
 
 function handleTouchEnd(e) {
     e.preventDefault();
+    const now = performance.now();
 
     for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
@@ -2063,7 +2227,16 @@ function handleTouchEnd(e) {
         }
         // Player 1 Fire
         if (touchInput.player1.fireActive && touch.identifier === touchInput.player1.touchId) {
-            if (players[0]) players[0].isShooting = false;
+            if (players[0]) {
+                if (players[0].isHoldingFire) {
+                    players[0].isHoldingFire = false;
+                    const duration = now - players[0].firePressTime;
+                    // Auto-fire toggle on quick tap
+                    if (duration < 250) {
+                        players[0].fireState = !players[0].fireState;
+                    }
+                }
+            }
             touchFireLeft.classList.remove('active');
             touchInput.player1.fireActive = false;
             touchInput.player1.touchId = null;
@@ -2080,7 +2253,16 @@ function handleTouchEnd(e) {
         }
         // Player 2 Fire
         if (touchInput.player2.fireActive && touch.identifier === touchInput.player2.touchId) {
-            if (players[1]) players[1].isShooting = false;
+            if (players[1]) {
+                if (players[1].isHoldingFire) {
+                    players[1].isHoldingFire = false;
+                    const duration = now - players[1].firePressTime;
+                    // Auto-fire toggle on quick tap
+                    if (duration < 250) {
+                        players[1].fireState = !players[1].fireState;
+                    }
+                }
+            }
             touchFireRight.classList.remove('active');
             touchInput.player2.fireActive = false;
             touchInput.player2.touchId = null;
